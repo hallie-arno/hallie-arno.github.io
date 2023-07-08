@@ -1,0 +1,337 @@
+---
+title: "GDI Petrels Survey"
+description: "Click to select grid squares."
+format:
+  html:
+    page-layout: full
+    css: style.css
+execute:
+  echo: false
+  warning: false
+
+---
+<!-- From https://github.com/kbvernon/hndsr-watersheds/blob/main/observable-map.qmd 
+TO DO
+- clear all button
+- erroe bars via bootstapping that decrease 
+-Plots 
+-->
+
+
+```{r}
+library(tidyverse)
+df <- read.csv("petrelgridcounts.csv")
+ojs_define(data = transpose(df))
+```
+
+```{ojs}
+L = {
+  const L = await require("leaflet/dist/leaflet.js");
+  if (!L._style) {
+    const href = await require.resolve("leaflet/dist/leaflet.css");
+    document.head.appendChild(L._style = html`<link href=${href} rel=stylesheet>`);
+  }
+
+  return L;
+};
+
+```
+
+```{ojs}
+
+watersheds = d3.json("petreldensity2022.geojson"); 
+```
+
+
+:::::: {.panel-sidebar}
+
+
+
+```{ojs}
+viewof occupancy = Inputs.range([0, 1], {label: 'Occupancy Rate', step: .01})
+viewof habitat = Inputs.range([0, 1], {label: 'available habitat ratio (Non-wetland)', step: .01})
+```
+
+```{ojs}
+petrel_estimate = get_extrap(); 
+percent = get_percent();
+```
+
+#### Estimated # of Petrels: 
+```{ojs}
+//|classes: text
+petrel_estimate
+
+viewof update = Inputs.button("Update")
+
+```
+
+#### Percent of island selected: 
+```{ojs}
+percent
+```
+
+
+
+
+```{r}
+obs_area=52982.81 #area covered in our plots
+vegetated_area=737259.4 #Great Duck's area that isn't coastline
+wetland_area=48397.05 #area of Great Duck that is wetland and therefore not petrel habitat
+habitat_area=vegetated_area-wetland_area #total petrel habitat available.
+```
+
+::::::
+
+:::::: {.panel-fill}
+
+```{ojs}
+
+container = {
+
+  let x = d3.create("div")
+  
+  x.attr("style", `width:100%;height:${window.outerHeight * 0.65}px`);
+
+  return x.node();
+
+}
+
+```
+
+```{ojs}
+
+gdi = {
+  
+  let map = L.map(container);
+  
+  // add basemap layers
+ 
+  
+  const esri = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+  
+  var OpenStreetMap_Mapnik = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+	maxZoom: 19,
+	attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+  
+  const Esri_WorldImagery = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 
+  {
+	  attribution: esri,
+	  minZoom: 0,
+  	maxZoom: 22,
+    ext: 'png'
+  });
+  
+  // button to toggle basemap layer selection
+  L.control.layers(
+    {
+      "Esri World Imagery": Esri_WorldImagery,
+      "Open Street Map": OpenStreetMap_Mapnik,
+    },
+    null,
+    {position: 'topleft'}
+  ).addTo(map);
+  
+  L.control.scale().addTo(map);
+  
+  map.setView([44.154, -68.25], 14);
+
+  return map; 
+
+};
+
+```
+
+```{ojs}
+
+styles = ({
+  basic: {
+    weight: 0.8,
+    fillColor: "#696969",
+    fillOpacity: 0.4,
+    color: "#E6E6F2",
+    opacity: 0.4
+  },
+  highlight: {
+    weight: 1.2,
+    fillColor: "4682b4",
+    fillOpacity: 0.8,
+    color: "#5e5e5e",
+    opacity: 0.8
+  },
+  select: {
+    weight: 1.0,
+    fillColor: "#66ddaa ",
+    fillOpacity: 0.8,
+    color: "#5e5e5e",
+    opacity: 0.6
+  }
+});
+
+```
+
+```{ojs}
+
+// main variable for tracking huc10 selections
+mutable results = [];
+mutable numbers = [];
+```
+
+```{ojs}
+
+nums = {
+
+// indexOf returns index number if e exists, -1 otherwise
+  const idx = (e) => { return results.indexOf(e.feature.properties.Plot); };
+  
+  const highlightFeature = (e) => {
+
+    e.target.setStyle(styles.highlight); 
+    e.target.bringToFront();
+    e.target.openPopup();
+  
+  };
+  
+  const resetHighlight = (e) => { 
+
+    let q = (idx(e.target) < 0) ? styles.basic : styles.select;
+    
+    e.target.setStyle(q);
+    e.target.closePopup();
+  
+  };
+  
+  const toggleFeature = (e) => {
+
+    const i = idx(e.target);
+    
+    if (i > -1) {
+            
+      e.target.setStyle(styles.basic);
+      results.splice(i, 1);
+      numbers.splice(i, 1);
+      
+    } else {
+              
+      e.target.setStyle(styles.select);
+      results.push(e.target.feature.properties.Plot);
+      numbers.push(e.target.feature.properties.extrap); //but it's not plot-- and make numbers array
+      
+    };
+     
+  // set(viewof numbers_view, numbers);
+   
+  };
+  
+  const pop = (e) => {
+  
+    const txt = `
+      <div class="popup">
+        <ul>
+          <li> <b>Grid:</b> ${e.properties.Plot} </li>
+          <li> <b>Extrapolated Count:</b> ${e.properties.extrap} </li>
+          <li> <b>Number of subplots:</b> ${e.properties.n_subplots} </li>
+        </ul>
+      </div>
+    `;
+    
+    return txt;
+    
+  };
+  
+  
+
+
+  const onEachFeature =  (feature, layer) => {
+    
+    layer.bindTooltip(pop(feature), {offset: L.point(30,0)});
+    
+    layer.on({
+      mouseover: highlightFeature,
+      mouseout: resetHighlight,
+      click: toggleFeature
+    });
+    
+  }
+
+  let layer = L.geoJSON(watersheds, { 
+    style: styles.basic, 
+    onEachFeature: onEachFeature
+  }).addTo(gdi);
+  
+  return numbers;
+
+}
+
+```
+
+```{ojs}
+// push results to viewof site (site input)
+//This is only called for toggleFeature when sites are clicked from map, 
+//NOT called when sites are selected from checkboxes (to prevent weirdness)
+function set(input, value) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", {bubbles: true}));
+}
+```
+
+```{ojs}
+
+function get_extrap() {
+  update;
+  //100 plots total let's say
+  let sum = numbers.reduce((a, b) => a + b, 0)
+  let mean = sum/numbers.length
+  let number_of_grids = 291 * habitat
+  let total = (mean * number_of_grids * occupancy);
+  return total;
+}
+  
+```
+
+```{ojs}
+
+function get_percent() {
+  update;
+  if (numbers.length > 0) {
+  let len = numbers.length + 1;
+  return  (len/291)*100; 
+  } else {
+  return 0;
+}
+
+}
+  
+```
+
+
+::::::
+
+<!-- THE REACTIONS -->
+
+
+
+```{ojs}
+
+// Add HUC10 IDs to results-container in side panel
+
+displayResults = {
+
+  //trigger;
+
+  let txt = [];
+  
+  if (results.length > 0) { txt.push(results.map(e => " " + e)) };
+  
+  d3.select(".results")
+    .selectAll("p")
+    .filter((d,i) => { return i == 0 })
+    .text(txt);
+
+};
+
+```
+
+
