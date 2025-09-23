@@ -1197,12 +1197,14 @@ margin-right: 0; }
 <section id="variables-can-be-numeric-characters-or-groups-of-those" class="slide level2">
 <h2>Variables can be numeric, characters, or groups of those!</h2>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href></a><span class="co">#use the built in typof() function to determine what type it is. </span></span>
-<span id="cb19-2"><a href></a><span class="fu">typeof</span>(<span class="st">&quot;a bunch of text in quotes is called a string.&quot;</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href></a>stringVariable <span class="ot">&lt;-</span> <span class="st">&quot;a bunch of text in quotes is called a string.&quot;</span></span>
+<span id="cb19-2"><a href></a>numericVariable <span class="ot">&lt;-</span> <span class="fl">47.3</span></span>
+<span id="cb19-3"><a href></a><span class="co">#use the built in typof() function to determine what type it is. </span></span>
+<span id="cb19-4"><a href></a><span class="fu">typeof</span>(stringVariable)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[1] &quot;character&quot;</code></pre>
 </div>
-<div class="sourceCode cell-code" id="cb21"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href></a><span class="fu">typeof</span>(<span class="fl">47.3</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb21"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href></a><span class="fu">typeof</span>(numericVariable)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>[1] &quot;double&quot;</code></pre>
 </div>
