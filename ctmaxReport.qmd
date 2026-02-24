@@ -837,10 +837,7 @@ write.table(fffGWAS10e4 %>%
               select(`#CHROM`, POS, POSend, ID) %>%
               distinct(),
   "ctMaxReportMetadata/FFFctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
-```
 
-
-```{r xgBoostPLINK}
 #| output: false
 # TRB
 system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/TrbTrainCTmax.tsv --extract ctMaxReportMetadata/TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainTRB  --make-bed" ))
@@ -852,12 +849,8 @@ system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMa
 system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTrainCTmax.tsv --extract ctMaxReportMetadata/FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainFFF --mind 0.2 --make-bed" ))
 
 system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTestCTmax.tsv --extract ctMaxReportMetadata/FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTestFFF --mind 0.2 --make-bed" ))
-```
 
-
-```{r xgBoostDataPrep}
-#| message: false
-#| 
+ 
 trainfamTRB <- fread("ctMaxReportMetadata/ctmaxTrainTRB.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
@@ -1056,6 +1049,7 @@ mpXG
 
 ```
 
+
 ##### Cover
 ```{r coverMP}
 mpXC <-  ggplot() + 
@@ -1108,12 +1102,14 @@ mpXF
 
 :::
 
-#### Compare TRB and F:
+In all of these, there seems to be a cluster of SNPs on Chr13 for farmed fish only. While these are not always the same SNPs as in the random forest overlap, they may be part of the same genes. 
+
+#### Compare TRB and F most important SNPs from xgboost:
 ```{r TRBvFxgboost}
 rmarkdown::paged_table(merge(fXgImp, trbXgImp, by = "Feature"))
 ```
 
-No overlap. 
+No SNP overlap. 
 
 #### Bedtools intersect with genes:
 
@@ -1169,18 +1165,27 @@ merge(xgBoostImp, combinedRF, by = c("Feature", "Group", "Number", "POS")) %>%
 RF + xgboost **distinct** genes overlap for TRB: 
 ```{r}
 ##trb
-rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostTRBGene.tsv"), fread("ctMaxReportMetadata/RF.Small.TRB.genes.tsv"), by = "V4") %>% 
-  select(V4) %>%
-  distinct())
+rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostTRBGene.tsv"), fread("ctMaxReportMetadata/RF.Small.TRB.genes.tsv"), by = c("V4", "V1")) %>% 
+  select(V4, V1) %>%
+  distinct()) %>% 
+  rename("CHROM" = "V1",
+         "Gene" = "V4") %>% 
+  merge(chr) %>% 
+  select(Number, Gene)
 
 ```
 For aquaculture: 
 ```{r}
 ##farm
-rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostFGene.tsv"), fread("ctMaxReportMetadata/RF.Small.F.genes.tsv"), by = "V4") %>% 
-  select(V4) %>%
-  distinct())
+rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostFGene.tsv"), fread("ctMaxReportMetadata/RF.Small.F.genes.tsv"), by = c("V4", "V1")) %>% 
+    select(V4, V1) %>%
+  distinct()) %>% 
+  rename("CHROM" = "V1",
+         "Gene" = "V4") %>% 
+  merge(chr) %>% 
+  select(Number, Gene)
 ```
+Many of the overlaps in genes between gradient boosting and random forest are on chromosome 13, suggesting this region is predictive of CTMax in farmed fish but not wild. While this region has too few genes for ShinyGO, I suspect it has something to do with growth. 
 
 All of these overlaps change slighlty depending on RF/ XGBoost run. I think model tuning would make the results more stable, though there may always be some stochasticity.
 
@@ -1308,7 +1313,7 @@ To do: \
 - Tune RF and xgboost models\
 - Finish genotyping aquaculture fish and run admixture, then model CTMax by Aquaculture Ancestry\
 - Polygenic Risk Scores\
-- Methylation data\
+- Methylation data? Or maybe that will be another paper. \
 
 Related Projects: \
 - Make code for Manhattan Plots shareable on GitHub\
