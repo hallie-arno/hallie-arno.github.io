@@ -38,18 +38,18 @@ For detailed methods, see: <https://docs.google.com/document/d/17h9AMruVNdF4moGN
 ```{r uploadMetadata}
 #| echo: false
 
-ambient <- read.csv("dailyAmbient.csv") %>% 
+ambient <- read.csv("ctMaxReportMetadata/dailyAmbient.csv") %>% 
   rename("DailyTemp" = "TempC") %>% 
   select(-c(Date))
 
-metadata <- fread("HallieCTMaxDatasheet.csv") %>% 
+metadata <- fread("ctMaxReportMetadata/HallieCTMaxDatasheet.csv") %>% 
   select(c(Vial, Tank, Weight, Temp_C, Date)) %>% 
   rename("SampleID" = "Vial") %>% 
   mutate(Day = lubridate::yday(Date)-284) %>% 
   merge(ambient, by = "Day")
 
 
-meta <- fread("CtMaxFish.fam") %>% 
+meta <- fread("ctMaxReportMetadata/CtMaxFish.fam") %>% 
   rename("FID"="V1",
          "IID" = "V2") %>% 
   select(c(FID, IID)) %>% 
@@ -80,7 +80,7 @@ binFunction <- function(PC1, PC2) {
 
 #Fix so that group is based on genetic group instead of guessing
 
-metaPCA <- fread("CtMaxFish.eigenvec") %>% 
+metaPCA <- fread("ctMaxReportMetadata/CtMaxFish.eigenvec") %>% 
   rename("FID" = "V1",
          "IID" = "V2",
          "PC1" = "V3",
@@ -282,7 +282,9 @@ There are likely 3 salmon/ trout hybrids. I am still not sure why there are two 
 *The rest of this document uses only salmon samples (PC1 < 0).*
 
 ### PLINK GWAS
-The first step was conducting a basic GWAS in PLINK. I ran the GWAS seperately between wild and aquaculture, since running them together resulted in SNPs highly differential between groups, not necessarily associated with thermal tolerance. Note these models use no covariates
+The first step was conducting a basic GWAS in PLINK. I ran the GWAS seperately between wild and aquaculture, since running them together resulted in SNPs highly differential between groups, not necessarily associated with thermal tolerance. Note these models use no covariates.
+
+Using Bonferroni false discovery rate correction for p-values: 
 
 ```{r bonferroni}
 #| warning: false
@@ -291,12 +293,12 @@ The first step was conducting a basic GWAS in PLINK. I ran the GWAS seperately b
 bonferroni <- .05/5510179
 
 
-trbGWASbonferroni <- fread("TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
-  filter(P < bonferroni) 
+trbGWASbonferroni <- fread("ctMaxReportMetadata/TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P <= bonferroni) 
 rmarkdown::paged_table(trbGWASbonferroni)
 
-fffGWASbonferroni <- fread("AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
-  filter(P < bonferroni) 
+fffGWASbonferroni <- fread("ctMaxReportMetadata/AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P <= bonferroni) 
 
 rmarkdown::paged_table(fffGWASbonferroni)
 
@@ -309,12 +311,12 @@ However, with a somewhat arbitrarily chosen alpha < 10^-4:
 #| warning: false
 #| message: false
 
-trbGWAS10e4 <- fread("TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
+trbGWAS10e4 <- fread("ctMaxReportMetadata/TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
   filter(P <= 0.0001) %>% 
   mutate(Group = "TRB")
 rmarkdown::paged_table(trbGWAS10e4)
 
-fffGWAS10e4 <- fread("AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
+fffGWAS10e4 <- fread("ctMaxReportMetadata/AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
   filter(P <= 0.0001 ) %>% 
   mutate(Group = "F")
 
@@ -327,7 +329,7 @@ There are many more significant aquaculture SNPs.
 #| message: false
 #| warning: false
 
-chr <- read_csv("ssal_chromosme_conversion.csv") %>% 
+chr <- read_csv("ctMaxReportMetadata/ssal_chromosme_conversion.csv") %>% 
   separate_wider_delim(ChrNum, delim = "a", names = c("Sp", "Number")) %>% 
   select(NC, Number) %>% 
   rename("CHROM" = "NC")
@@ -443,11 +445,11 @@ Just one of these is in a Gene (LOC106565882):
 write.table(overlap %>%  
               mutate(POSend = POS) %>% 
               select(c(CHROM, POS, POSend, ID)),
-  "10e4Overlap.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/10e4Overlap.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 
-system("bedtools intersect -b 10e4Overlap.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  10e4OverlapGenes.tsv")
-rmarkdown::paged_table(fread("10e4OverlapGenes.tsv"))
+system("bedtools intersect -b ctMaxReportMetadata/10e4Overlap.bed -a ctMaxReportMetadata/Ssal3_1.genes.unique.bed -wb >  ctMaxReportMetadata/10e4OverlapGenes.tsv")
+rmarkdown::paged_table(fread("ctMaxReportMetadata/10e4OverlapGenes.tsv"))
 ```
 
 
@@ -476,14 +478,14 @@ trainTRB <- tailrace[indTRB, ]
 testTRB <- tailrace[!indTRB, ]
 
 write.table(trainTRB %>% select(FID, IID) %>% distinct(), 
-            file = "TrbTrainCTmax.tsv", 
+            file = "ctMaxReportMetadata/TrbTrainCTmax.tsv", 
             col.names = F, 
             row.names = F, 
             sep = "\t", 
             quote = F)
 
 write.table(testTRB %>% select(FID, IID) %>% distinct(), 
-            file = "TrbTestCTmax.tsv", 
+            file = "ctMaxReportMetadata/TrbTestCTmax.tsv", 
             col.names = F, 
             row.names = F, 
             sep = "\t", 
@@ -499,14 +501,14 @@ trainF <- aquabounty[indF, ]
 testF<- aquabounty[!indF, ]
 
 write.table(trainF %>% select(FID, IID) %>% distinct(), 
-            file = "FTrainCTmax.tsv", 
+            file = "ctMaxReportMetadata/FTrainCTmax.tsv", 
             col.names = F, 
             row.names = F, 
             sep = "\t", 
             quote = F)
 
 write.table(testF %>% select(FID, IID) %>% distinct(), 
-            file = "FTestCTmax.tsv", 
+            file = "ctMaxReportMetadata/FTestCTmax.tsv", 
             col.names = F, 
             row.names = F, 
             sep = "\t", 
@@ -518,12 +520,12 @@ write.table(testF %>% select(FID, IID) %>% distinct(),
 #| message: false
 #| output: false
 
-system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTrainCTmax.tsv --extract ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainTRB.ThSn --make-bed"))
-system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTestCTmax.tsv --extract ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestTRB.ThSn --make-bed"))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/TrbTrainCTmax.tsv --extract ctMaxReportMetadata/ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainTRB.ThSn --make-bed"))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/TrbTestCTmax.tsv --extract ctMaxReportMetadata/ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTestTRB.ThSn --make-bed"))
 
 
-system(paste(plinkPath, "--bfile suspectedSalmon --keep FTrainCTmax.tsv --extract SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainF.SxFr  --make-bed" ))
-system(paste(plinkPath, "--bfile suspectedSalmon --keep FTestCTmax.tsv --extract SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestF.SxFr  --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTrainCTmax.tsv --extract ctMaxReportMetadata/SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainF.SxFr  --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTestCTmax.tsv --extract ctMaxReportMetadata/SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTestF.SxFr  --make-bed" ))
 
 
 ```
@@ -538,7 +540,7 @@ rf_generic <- rand_forest() %>%
   set_engine("ranger", importance = "permutation") #need to look more into importance type
 
 
-trainfamTRBThSn <- fread("ctmaxTrainTRB.ThSn.fam") %>% 
+trainfamTRBThSn <- fread("ctMaxReportMetadata/ctmaxTrainTRB.ThSn.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
@@ -546,7 +548,7 @@ trainfamTRBThSn <- fread("ctmaxTrainTRB.ThSn.fam") %>%
   distinct()
 
 
-dataTrainTRBThSn <- fread("ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTrainTRBThSn <- fread("ctMaxReportMetadata/ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 trbTrainImpThSn <- data.frame(apply(dataTrainTRBThSn, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
 
@@ -568,7 +570,7 @@ trbRfImpThSn <- data.frame(trbFitThSn$fit$fit$fit$variable.importance) %>%
 #### Repeat for farm
 
 
-trainfamFSxFr <- fread("ctmaxTrainF.SxFr.fam") %>% 
+trainfamFSxFr <- fread("ctMaxReportMetadata/ctmaxTrainF.SxFr.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
@@ -576,7 +578,7 @@ trainfamFSxFr <- fread("ctmaxTrainF.SxFr.fam") %>%
   distinct()
 
 
-dataTrainFSxFr <- fread("ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTrainFSxFr <- fread("ctMaxReportMetadata/ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 fTrainImpSxFr <- data.frame(apply(dataTrainFSxFr, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
 
@@ -606,8 +608,8 @@ combinedRF <- rbind(fRfImpSxFr, trbRfImpThSn) %>%
   mutate(Feature = paste0(ID, "_", N)) %>% 
   merge(chr, by.x = "NC", by.y = "CHROM") %>% 
   select(c(Number, POS, Feature, Group, RFImportance)) %>% 
-  arrange(desc(RFImportance))
-
+  arrange(desc(RFImportance)) %>% 
+  mutate(Number = as.numeric(Number))
 ```
 
 ::: {.panel-tabset}
@@ -632,12 +634,12 @@ trbFitThSn
 #### RF Test
 ```{r}
 #| message: false
-trbTestFam <- fread("ctmaxTrainTRB.ThSn.fam") %>% 
+trbTestFam <- fread("ctMaxReportMetadata/ctmaxTrainTRB.ThSn.fam") %>% 
   select(V2) %>% 
   rename("IID" = "V2") %>% 
   left_join(metaPCA)
 
-trbTestSNPs <- fread("ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+trbTestSNPs <- fread("ctMaxReportMetadata/ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 trbTest <- cbind(trbTestSNPs, trbTestFam$Temp_C)
 
@@ -650,12 +652,12 @@ predictionTRB <- predict(trbFitThSn, new_data = trbTest) %>%
 
 ### Farm
 
-fTestFam <- fread("ctmaxTrainF.SxFr.fam") %>% 
+fTestFam <- fread("ctMaxReportMetadata/ctmaxTrainF.SxFr.fam") %>% 
   select(V2) %>% 
   rename("IID" = "V2") %>% 
   left_join(metaPCA)
 
-fTestSNPs <- fread("ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+fTestSNPs <- fread("ctMaxReportMetadata/ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 fTest <- cbind(fTestSNPs, fTestFam$Temp_C)
 
@@ -679,12 +681,12 @@ predPlot
 #### Manhattan Plot of Random Forest results
 
 ```{r}
-rfMP <- prepData(combinedRF) %>% 
-  mutate(Number = as.numeric(Number))
+rfMP <- prepData(combinedRF %>%  arrange(Number)) 
+
 center <- rfMP[,.(center=mean(BP)),.(Number)];
 
 
-mp <-  ggplot() + 
+mpRF <-  ggplot() + 
    geom_point(data = rfMP, aes(x = BP, y = RFImportance, shape = as.factor(Group), colour = as.factor(Number)),  alpha = 1, size = 2) +
   theme_bw() + 
    scale_x_continuous(
@@ -704,7 +706,7 @@ mp <-  ggplot() +
   labs(x = "Position", y = "Random Forest Importance") +
   facet_wrap(~Group, ncol = 1)
  
-mp
+mpRF
 
 ```
 There are no SNP overlaps between wild and farmed. 
@@ -757,18 +759,18 @@ finalTRB <- trbRfImpThSn %>%
 write.table(finalTRB %>%  
               distinct() %>% 
               select(c(NC, POS, POSend, ID)),
-  "FinalTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/FinalTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 write.table(finalF %>%  
               distinct() %>% 
               select(c(NC, POS, POSend, ID)),
-  "FinalF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/FinalF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 
-system("bedtools intersect -b FinalTRB.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  RF.Small.TRB.genes.tsv")
-system("bedtools intersect -b FinalF.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  RF.Small.F.genes.tsv")
+system("bedtools intersect -b ctMaxReportMetadata/FinalTRB.bed -a ctMaxReportMetadata/Ssal3_1.genes.unique.bed -wb >  ctMaxReportMetadata/RF.Small.TRB.genes.tsv")
+system("bedtools intersect -b ctMaxReportMetadata/FinalF.bed -a ctMaxReportMetadata/Ssal3_1.genes.unique.bed -wb >  ctMaxReportMetadata/RF.Small.F.genes.tsv")
 
-trbGene <- fread("RF.Small.TRB.genes.tsv") %>% 
+trbGene <- fread("ctMaxReportMetadata/RF.Small.TRB.genes.tsv") %>% 
   rename("CHROM" = "V1",
          "POS" = "V6", 
          "ID" = "V8",
@@ -779,7 +781,7 @@ trbGene <- fread("RF.Small.TRB.genes.tsv") %>%
   merge(chr, by = "CHROM") %>% 
   select(c(Number, POS, Gene, Feature, Group, BETA, P, RFImportance))
   
-fGene <- fread("RF.Small.F.genes.tsv") %>% 
+fGene <- fread("ctMaxReportMetadata/RF.Small.F.genes.tsv") %>% 
   rename("CHROM" = "V1",
          "POS" = "V6", 
          "ID" = "V8",
@@ -826,7 +828,7 @@ write.table(trbGWAS10e4 %>%
               mutate(POSend = POS) %>% 
               select(`#CHROM`, POS, POSend, ID) %>%
               distinct(),
-  "TRBctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/TRBctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 
 write.table(fffGWAS10e4 %>%  
@@ -834,29 +836,29 @@ write.table(fffGWAS10e4 %>%
                  mutate(POSend = POS) %>% 
               select(`#CHROM`, POS, POSend, ID) %>%
               distinct(),
-  "FFFctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/FFFctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 ```
 
 
 ```{r xgBoostPLINK}
 #| output: false
 # TRB
-system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTrainCTmax.tsv --extract TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainTRB  --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/TrbTrainCTmax.tsv --extract ctMaxReportMetadata/TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainTRB  --make-bed" ))
 
-system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTestCTmax.tsv --extract TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestTRB --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/TrbTestCTmax.tsv --extract ctMaxReportMetadata/TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTestTRB --make-bed" ))
 
 # Aqc
 
-system(paste(plinkPath, "--bfile suspectedSalmon --keep FTrainCTmax.tsv --extract FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainFFF --mind 0.2 --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTrainCTmax.tsv --extract ctMaxReportMetadata/FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTrainFFF --mind 0.2 --make-bed" ))
 
-system(paste(plinkPath, "--bfile suspectedSalmon --keep FTestCTmax.tsv --extract FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestFFF --mind 0.2 --make-bed" ))
+system(paste(plinkPath, "--bfile ctMaxReportMetadata/suspectedSalmon --keep ctMaxReportMetadata/FTestCTmax.tsv --extract ctMaxReportMetadata/FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctMaxReportMetadata/ctmaxTestFFF --mind 0.2 --make-bed" ))
 ```
 
 
 ```{r xgBoostDataPrep}
 #| message: false
 #| 
-trainfamTRB <- fread("ctmaxTrainTRB.fam") %>% 
+trainfamTRB <- fread("ctMaxReportMetadata/ctmaxTrainTRB.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
@@ -864,7 +866,7 @@ trainfamTRB <- fread("ctmaxTrainTRB.fam") %>%
    distinct()
 
 
-dataTrainTRB <- fread("ctmaxTrainTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTrainTRB <- fread("ctMaxReportMetadata/ctmaxTrainTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 #genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 trbTrainImp<- data.frame(apply(dataTrainTRB, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
@@ -877,14 +879,14 @@ TRBForRF <- na.omit(cbind(trbTrainImp, trainfamTRB$Temp_C)) %>%
 ## TEST ##
 ###########
 
-testfamTRB <- fread("ctmaxTestTRB.fam") %>% 
+testfamTRB <- fread("ctMaxReportMetadata/ctmaxTestTRB.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
   inner_join(metaPCA) 
 
 
-dataTestTRB <- fread("ctmaxTestTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTestTRB <- fread("ctMaxReportMetadata/ctmaxTestTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 #genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 trbTestImp<- data.frame(apply(dataTestTRB, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x)))))))
@@ -896,7 +898,7 @@ trbTest <- cbind(trbTestImp, testfamTRB$Temp_C) %>%
 ### Farm ####
 #############
 
-trainfamF <- fread("ctmaxTrainFFF.fam") %>% 
+trainfamF <- fread("ctMaxReportMetadata/ctmaxTrainFFF.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
@@ -904,7 +906,7 @@ trainfamF <- fread("ctmaxTrainFFF.fam") %>%
   distinct()
 
 
-dataTrainF <- fread("ctmaxTrainFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTrainF <- fread("ctMaxReportMetadata/ctmaxTrainFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 #genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 fffTrainImp<- data.frame(apply(dataTrainF, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
@@ -917,7 +919,7 @@ FForRF <- na.omit(cbind(fffTrainImp, trainfamF$Temp_C)) %>%
 ## TEST ##
 ###########
 
-testfamFFF <- fread("ctmaxTestFFF.fam") %>% 
+testfamFFF <- fread("ctMaxReportMetadata/ctmaxTestFFF.fam") %>% 
   select(V1, V2) %>% 
   rename("FID" = "V1",
          "IID" = "V2") %>% 
@@ -925,7 +927,7 @@ testfamFFF <- fread("ctmaxTestFFF.fam") %>%
   distinct()
 
 
-dataTestF <- fread("ctmaxTestFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+dataTestF <- fread("ctMaxReportMetadata/ctmaxTestFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 #genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
 
 fffTestImp<- data.frame(apply(dataTestF, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
@@ -1130,20 +1132,20 @@ fForGeneXG <- xgBoostImp %>%
 write.table(trbForGeneXG %>%  
               mutate(POSend = POS) %>% 
               select(c(NC, POS, POSend, ID)),
-  "xgBoostTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/xgBoostTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 write.table(fForGeneXG %>%  
               mutate(POSend = POS) %>% 
               select(c(NC, POS, POSend, ID)),
-  "xgBoostF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+  "ctMaxReportMetadata/xgBoostF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
 
 
-system("bedtools intersect -b xgBoostTRB.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  xgBoostTRBGene.tsv")
+system("bedtools intersect -b ctMaxReportMetadata/xgBoostTRB.bed -a ctMaxReportMetadata/Ssal3_1.genes.unique.bed -wb >  ctMaxReportMetadata/xgBoostTRBGene.tsv")
 
-system("bedtools intersect -b xgBoostF.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  xgBoostFGene.tsv")
+system("bedtools intersect -b ctMaxReportMetadata/xgBoostF.bed -a ctMaxReportMetadata/Ssal3_1.genes.unique.bed -wb >  ctMaxReportMetadata/xgBoostFGene.tsv")
 
 
-rmarkdown::paged_table(merge(fread("xgBoostTRBGene.tsv"), fread("xgBoostFGene.tsv"), by = "V4") %>% 
+rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostTRBGene.tsv"), fread("ctMaxReportMetadata/xgBoostFGene.tsv"), by = "V4") %>% 
   select(V4))
 
 ```
@@ -1156,7 +1158,7 @@ ShinyGO for each list seperately reveals 1 pathway for TRB (Arginine and proline
 For now, I will use gain to compare to random forest, which is generally considered the best indicator of gradient boosting importance (though I will read more about this!)
 
 
-SNP overlap: 
+There is a moderate amount of SNP overlap: 
 ```{r xgBoostToRF}
 
 merge(xgBoostImp, combinedRF, by = c("Feature", "Group", "Number", "POS")) %>% 
@@ -1167,7 +1169,7 @@ merge(xgBoostImp, combinedRF, by = c("Feature", "Group", "Number", "POS")) %>%
 RF + xgboost **distinct** genes overlap for TRB: 
 ```{r}
 ##trb
-rmarkdown::paged_table(merge(fread("xgBoostTRBGene.tsv"), fread("RF.Small.TRB.genes.tsv"), by = "V4") %>% 
+rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostTRBGene.tsv"), fread("ctMaxReportMetadata/RF.Small.TRB.genes.tsv"), by = "V4") %>% 
   select(V4) %>%
   distinct())
 
@@ -1175,7 +1177,7 @@ rmarkdown::paged_table(merge(fread("xgBoostTRBGene.tsv"), fread("RF.Small.TRB.ge
 For aquaculture: 
 ```{r}
 ##farm
-rmarkdown::paged_table(merge(fread("xgBoostFGene.tsv"), fread("RF.Small.F.genes.tsv"), by = "V4") %>% 
+rmarkdown::paged_table(merge(fread("ctMaxReportMetadata/xgBoostFGene.tsv"), fread("ctMaxReportMetadata/RF.Small.F.genes.tsv"), by = "V4") %>% 
   select(V4) %>%
   distinct())
 ```
