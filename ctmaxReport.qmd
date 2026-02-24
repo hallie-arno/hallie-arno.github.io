@@ -1,0 +1,1314 @@
+---
+title: "CTMax Report"
+author: "Hallie Arno"
+format: 
+  html:
+    code-fold: true
+editor: source
+---
+
+```{r libraries}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(data.table)
+library(parsnip)
+library(ranger)
+library(tidymodels)
+library(xgboost)
+library(workflows)
+library(stringi)
+library(lubridate)
+library(plotly)
+library(kernelshap)
+library(shapviz)
+
+set.seed(12)
+
+plinkPath <- "/opt/miniconda3/bin/plink2"
+
+```
+
+
+# Experiments and Linear Models
+
+For detailed methods, see: <https://docs.google.com/document/d/17h9AMruVNdF4moGN1OnuQsRiXw9gWWQkvINjjDFYk-I/edit?usp=sharing>
+
+```{r uploadMetadata}
+#| echo: false
+
+ambient <- read.csv("dailyAmbient.csv") %>% 
+  rename("DailyTemp" = "TempC") %>% 
+  select(-c(Date))
+
+metadata <- fread("HallieCTMaxDatasheet.csv") %>% 
+  select(c(Vial, Tank, Weight, Temp_C, Date)) %>% 
+  rename("SampleID" = "Vial") %>% 
+  mutate(Day = lubridate::yday(Date)-284) %>% 
+  merge(ambient, by = "Day")
+
+
+meta <- fread("CtMaxFish.fam") %>% 
+  rename("FID"="V1",
+         "IID" = "V2") %>% 
+  select(c(FID, IID)) %>% 
+   mutate(SampleIDStart = stri_extract(IID, regex = "(?<=_i5.).*")) %>% 
+  mutate(SampleID = sub("\\.realigned.bam.*", "", SampleIDStart)) %>% 
+  mutate(Population = gsub('[[:digit:]]+', '', SampleID)) %>% 
+  select(-SampleIDStart) %>% 
+  merge(metadata) %>% 
+  filter(IID != "NS.X0112.002.UDP0201_i7---UDP0201_i5.TRB104.realigned.bam") #come back to later
+
+duplicates <- meta %>% 
+  select(FID, IID) %>% 
+  group_by(IID) %>% 
+  summarize(n = n()) %>% 
+  filter(n > 1)
+meta <- meta %>% 
+   filter(!IID %in% duplicates$IID)
+
+binFunction <- function(PC1, PC2) {
+  if (PC1 > 0) {
+    return("Terrenceville (Brown Trout)")
+  } else if (PC1 < 0 & PC2 > 0) {
+    return("Tailrace (Hybrid Swarm)")
+  } else if (PC1 < 0 & PC2 < 0) {
+    return("Aquabounty (Aquaculture)")
+  }
+}
+
+#Fix so that group is based on genetic group instead of guessing
+
+metaPCA <- fread("CtMaxFish.eigenvec") %>% 
+  rename("FID" = "V1",
+         "IID" = "V2",
+         "PC1" = "V3",
+         "PC2" = "V4",
+         "PC3" = "V5") %>% 
+  select(c(FID, IID, PC1, PC2, PC3)) %>% 
+  merge(meta) %>% 
+  rowwise() %>% 
+  mutate(Group = binFunction(PC1, PC2)) %>% 
+  filter(!IID %in% duplicates$IID)
+```
+
+```{r boxplot}
+#| warning: false
+#| echo: false
+
+ggplot(metaPCA, aes(x = Group, y = Temp_C)) + 
+  geom_boxplot(colour = "darkblue") + 
+  theme_bw() +
+  ylab("Critical Thermal Maximum (C)")
+```
+Fish from the wild river had the highest CTMax. Aquaculture fish had the lowest CTMax, while Terrenceville Trout were intermediate. Differences between groups are statistically significant (see models below).
+
+## GLMs
+Questions: 
+
+<b>
+1: Does group (ancestry) impact CTMax? 
+
+2: Does ambient temperature impact CTMax?
+
+3: How much does weight account for CTMax? 
+</b>
+
+*GzLMs are used instead of an lm() because it is nuetral to the order of the terms.*
+
+Variables: 
+
+Group: Population (Tailrace, Terrenceville, Aquabounty)
+
+Weight: Wight in grams after CTMax Trial.
+
+Daily Temp: Ambient temperature that fish were kept at the morning of the CTMax trial. All fish were at the same ambient temperature. 
+
+*Reviewers may ask for mixed models using trial date or tank as a random factor, I am working on these.*
+
+
+### Model with both groups, including weight, daily ambient temperature, and interaction term.
+```{r omnibusModel}
+model1 <- glm(Temp_C~Group + Weight + DailyTemp + Group*Weight + Group*DailyTemp + Weight*DailyTemp, data = metaPCA, family = gaussian(link = "identity"))
+
+```
+
+::: {.panel-tabset}
+#### ANOVA Table
+```{r}
+rmarkdown::paged_table(anova(model1)%>% select(-c(Df, `Resid. Df`)))
+
+```
+#### Effect Sizes (Summary)
+```{r}
+summary(model1)
+```
+#### Residual Plots
+:::: {#fig-plots layout-ncol=2}
+```{r}
+plot(model1)
+```
+::::
+
+:::
+
+When including all populations and ambient temperature in the model, population is the most important factor in predicting CTMax. Weight alone is not a significant predictor overall (though note, it is correlated with both group and ambient daily temperature) but may be significant within group (see interaction term in summary). Ambient daily temperature is significant in the ANOVA, but has a small effect size and is not significant in the summary (this is likely because of the method used to detect significance in each; because there is only one temperature for all values that day there could be some weird results). 
+
+### Model with aquaculture fish only, including weight, daily ambient temperature, and interaction term.
+
+
+```{r aqcModel}
+aqcMeta <- metaPCA %>% 
+  filter(Group == "Aquabounty (Aquaculture)")
+
+modelA <- glm(Temp_C~Weight + DailyTemp + Weight*DailyTemp, data = aqcMeta, family = gaussian(link = "identity"))
+```
+
+::: {.panel-tabset}
+#### ANOVA Table
+```{r}
+rmarkdown::paged_table(anova(modelA)%>% select(-c(Df, `Resid. Df`)))
+
+```
+#### Effect Sizes (Summary)
+```{r}
+summary(modelA)
+```
+
+#### Residual Plots
+:::: {#fig-plots layout-ncol=2}
+```{r}
+plot(modelA)
+```
+::::
+
+:::
+
+This model shows similar results to the omnibus model. In the ANOVA table, both weight and ambient temperature are significant. Weight has a much larger effect size in the summary. Again, these are correlated, so it may be difficult to pull apart the variance from each. 
+
+### Model with aquaculture fish only, including weight, daily ambient temperature, and interaction term.
+
+```{r wildModel}
+wildMeta <- metaPCA %>% 
+  filter(Group == "Tailrace (Hybrid Swarm)")
+
+modelW <- glm(Temp_C~Weight + DailyTemp + Weight*DailyTemp, data = wildMeta, family = gaussian(link = "identity"))
+```
+
+::: {.panel-tabset}
+#### ANOVA Table
+```{r}
+rmarkdown::paged_table(anova(modelW) %>% select(-c(Df, `Resid. Df`)))
+
+```
+#### Effect Sizes (Summary)
+```{r}
+summary(modelW)
+```
+
+#### Residual Plots
+:::: {#fig-plots layout-ncol=2}
+```{r}
+plot(modelW)
+```
+::::
+
+:::
+
+For wild fish, ambient daily temperature has a larger effect size and significance than weight. Maybe this is because they were more uniform in weight from beginning to end of the trials? Or maybe this has something to do with adaptation to fluctuating temperatures in the wild. Perhaps something in the methylation data would provide insight. I think this result is really interesting, especially in light of recent research showing acclimation temperature is extremely important for CTMax in hatchery fish. 
+
+### Summary Plots
+::: {.panel-tabset}
+#### Weight Distribution
+```{r weights}
+#| warning: false
+#| echo: false
+ggplot(metaPCA, aes(x = Weight, fill = Group, colour = Group)) + 
+  geom_density(alpha = 0.3) + 
+  theme_bw() + 
+  ggtitle("Distribution of Weights")
+```
+
+#### Ambient Temp.
+```{r ambientTemp}
+#| warning: false
+#| echo: false
+
+ggplot(metaPCA, aes(x = Day, y = DailyTemp)) + 
+  geom_point() + 
+  theme_bw() + 
+  ggtitle("Ambient Daily Temperature At Each Trial") + 
+  xlab("Trial Day") + 
+  ylab("Ambient Temperature (C)")
+```
+
+#### Weight vs. Ambient Temp
+How Correlated are Daily Temp and Weight Really?
+```{r weightVTemp}
+#| warning: false
+#| echo: false
+
+ggplot(metaPCA, aes(y = Weight, x = DailyTemp, colour = Group)) + 
+  geom_point() + 
+  stat_smooth(method = "lm") + 
+ # facet_wrap(.~Group, ncol = 1) +
+  theme_bw() + 
+  ggtitle("Ambient Daily Temperature Versus Weight") + 
+  xlab("Ambient Temp (C)") + 
+  ylab("Weight (g)")
+```
+:::
+
+# Genetic Data
+Population Structure\
+*click and drag to zoom*
+```{r pca}
+#| warning: false
+#| echo: false
+
+plot <- ggplot(metaPCA, aes(x = PC1, y = PC2, label = SampleID, colour = Population)) + 
+  geom_text(size = 2) + 
+  theme_bw() 
+
+ggplotly(plot)
+```
+
+*Some of the labels may be mistakes. Because of that, all models above use genetic group, not labelled group. Aquaculture fish are considered samples with PC1 & PC2 < 0.*
+
+There are likely 3 salmon/ trout hybrids. I am still not sure why there are two groups of farmed fish (perhaps they are closely related family groups). Most TRB fish are fairly tighly clustered, suggesting similar levels of introgression across the population. I don't think there are any F1 aquaculture/ wild hybrids. However, there are a few fish in TRB cluster with higher than expected PC1 (such as TRB75 and TRB84). Could this be EU introgression? Hopefully running admixture with other aquaculture samples will provide insight. 
+
+## Salmon GWAS
+*The rest of this document uses only salmon samples (PC1 < 0).*
+
+### PLINK GWAS
+The first step was conducting a basic GWAS in PLINK. I ran the GWAS seperately between wild and aquaculture, since running them together resulted in SNPs highly differential between groups, not necessarily associated with thermal tolerance. Note these models use no covariates
+
+```{r bonferroni}
+#| warning: false
+#| message: false
+#| 
+bonferroni <- .05/5510179
+
+
+trbGWASbonferroni <- fread("TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P < bonferroni) 
+rmarkdown::paged_table(trbGWASbonferroni)
+
+fffGWASbonferroni <- fread("AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P < bonferroni) 
+
+rmarkdown::paged_table(fffGWASbonferroni)
+
+```
+
+No SNPs are significant in TRB using a bonferroni p-value correction. 3 are significant in the farmed fish. 
+
+However, with a somewhat arbitrarily chosen alpha < 10^-4:
+```{r 10e04}
+#| warning: false
+#| message: false
+
+trbGWAS10e4 <- fread("TailraceGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P <= 0.0001) %>% 
+  mutate(Group = "TRB")
+rmarkdown::paged_table(trbGWAS10e4)
+
+fffGWAS10e4 <- fread("AquabountyGWASnoCovar.Temp_C.glm.linear") %>% 
+  filter(P <= 0.0001 ) %>% 
+  mutate(Group = "F")
+
+rmarkdown::paged_table(fffGWAS10e4)
+
+```
+There are many more significant aquaculture SNPs. 
+
+```{r PLINKmanhattanPlots}
+#| message: false
+#| warning: false
+
+chr <- read_csv("ssal_chromosme_conversion.csv") %>% 
+  separate_wider_delim(ChrNum, delim = "a", names = c("Sp", "Number")) %>% 
+  select(NC, Number) %>% 
+  rename("CHROM" = "NC")
+
+
+
+prepData <- function(df) {
+  myfile <- as.data.table(df)
+  #Make position numeric
+  myfile[, POS := as.numeric(POS)]
+  
+
+  #This determines the max bp for each chromosome 
+  data_cumu <- myfile[,.(maxBP=max(POS)),.(Number)];
+  
+  #This makes a dt with chr and BP to add for each
+  setDT(data_cumu)[, cum_sum := shift(cumsum(as.numeric(maxBP)), fill = 0)] 
+  
+  #Merge and add BP from above
+  new <- merge(myfile, data_cumu,  by = "Number")
+  
+  new[, BP := POS + cum_sum]
+  
+  
+  #Bind together and remove unnecessary rows
+  return(new[, c("maxBP", "cum_sum") := NULL])
+  
+
+}
+
+combinedGWAS <- rbind(trbGWAS10e4, fffGWAS10e4) %>% 
+  rename("CHROM" = `#CHROM`) %>% 
+  merge(chr) %>% 
+  select(-CHROM)
+  
+GWAS <- prepData(combinedGWAS)
+
+
+center <- GWAS[,.(center=mean(BP)),.(Number)];
+
+
+```
+
+::: {.panel-tabset}
+#### P-value
+```{r pValManhattanPlot}
+
+
+mp <-  ggplot() + 
+   geom_point(data = GWAS, aes(x = BP, y = -log(P, base = 10), colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+  scale_x_continuous(
+    label = center$Number,
+    breaks = center$center) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(GWAS$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "-log(P)") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mp
+```
+
+#### Beta
+```{r BetaManhattanPlot}
+
+
+mb <-  ggplot() + 
+   geom_point(data = GWAS, aes(x = BP, y = BETA, colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+  scale_x_continuous(
+    label = center$Number,
+    breaks = center$center) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(GWAS$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "BETA") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mb
+```
+
+:::
+
+### Overlap Between Wild and Farmed
+```{r}
+overlap <- merge(trbGWAS10e4, fffGWAS10e4, by = "ID") %>% 
+  select(c(ID, `#CHROM.x`, POS.x, BETA.x, BETA.y, P.x, P.y)) %>% 
+  rename(
+    "CHROM" = `#CHROM.x`,
+    "POS" = "POS.x"
+  ) %>% 
+  merge(chr, by = "CHROM")
+rmarkdown::paged_table(overlap)
+```
+Just one of these is in a Gene (LOC106565882):
+
+```{r}
+write.table(overlap %>%  
+              mutate(POSend = POS) %>% 
+              select(c(CHROM, POS, POSend, ID)),
+  "10e4Overlap.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+
+system("bedtools intersect -b 10e4Overlap.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  10e4OverlapGenes.tsv")
+rmarkdown::paged_table(fread("10e4OverlapGenes.tsv"))
+```
+
+
+The p < 10e4 subset of SNPs is sufficient to run random forest models. 
+
+## Machine Learning Models
+
+To determine SNPs most predictive of CTMax, I tried two machine learning models: random forest and gradient boosting. For both, I started with SNPs from the GWAS above (in part to just cut down on the processing power needed).
+
+### Random Forest
+
+For the random forest models, I iteratively removed the SNPs in the lower half of prediction power until the rsquared stopped increasing. The final SNPs I was left with are run here. 
+
+
+```{r RFDataPrep}
+#| message: false
+
+tailrace <- metaPCA %>% 
+  filter(Group == "Tailrace (Hybrid Swarm)") %>% 
+  filter(!is.na(Temp_C)) %>% 
+  distinct()
+
+indTRB <- sample(c(TRUE, FALSE), length(unique(tailrace$IID)), replace = TRUE, prob = c(0.6, 0.4))
+
+trainTRB <- tailrace[indTRB, ]
+testTRB <- tailrace[!indTRB, ]
+
+write.table(trainTRB %>% select(FID, IID) %>% distinct(), 
+            file = "TrbTrainCTmax.tsv", 
+            col.names = F, 
+            row.names = F, 
+            sep = "\t", 
+            quote = F)
+
+write.table(testTRB %>% select(FID, IID) %>% distinct(), 
+            file = "TrbTestCTmax.tsv", 
+            col.names = F, 
+            row.names = F, 
+            sep = "\t", 
+            quote = F)
+
+## Aqc train/ test
+aquabounty <- metaPCA %>% 
+  filter(Group == "Aquabounty (Aquaculture)")
+
+indF <- sample(c(TRUE, FALSE), length(unique(aquabounty$IID)), replace = TRUE, prob = c(0.6, 0.4))
+
+trainF <- aquabounty[indF, ]
+testF<- aquabounty[!indF, ]
+
+write.table(trainF %>% select(FID, IID) %>% distinct(), 
+            file = "FTrainCTmax.tsv", 
+            col.names = F, 
+            row.names = F, 
+            sep = "\t", 
+            quote = F)
+
+write.table(testF %>% select(FID, IID) %>% distinct(), 
+            file = "FTestCTmax.tsv", 
+            col.names = F, 
+            row.names = F, 
+            sep = "\t", 
+            quote = F)
+```
+
+
+```{r RFPLINK}
+#| message: false
+#| output: false
+
+system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTrainCTmax.tsv --extract ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainTRB.ThSn --make-bed"))
+system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTestCTmax.tsv --extract ThSnRfSNPsTRB.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestTRB.ThSn --make-bed"))
+
+
+system(paste(plinkPath, "--bfile suspectedSalmon --keep FTrainCTmax.tsv --extract SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainF.SxFr  --make-bed" ))
+system(paste(plinkPath, "--bfile suspectedSalmon --keep FTestCTmax.tsv --extract SxFrRfSNPsF.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestF.SxFr  --make-bed" ))
+
+
+```
+
+
+```{r randomForest}
+#| message: false
+# Need to change names! farm is 256!
+
+rf_generic <- rand_forest() %>% 
+  set_mode("regression") %>% 
+  set_engine("ranger", importance = "permutation") #need to look more into importance type
+
+
+trainfamTRBThSn <- fread("ctmaxTrainTRB.ThSn.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+  inner_join(meta) %>% 
+  distinct()
+
+
+dataTrainTRBThSn <- fread("ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+trbTrainImpThSn <- data.frame(apply(dataTrainTRBThSn, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
+
+TRBForRFThSn <- na.omit(cbind(trbTrainImpThSn, trainfamTRBThSn$Temp_C)) %>% 
+  rename( "CtMax" = "trainfamTRBThSn$Temp_C")
+
+trbRecipeThSn <- recipe(CtMax ~ ., data = TRBForRFThSn) 
+ 
+trbWfThSn <- workflow(trbRecipeThSn, rf_generic)
+
+trbFitThSn <- fit(trbWfThSn, TRBForRFThSn) #rsq = 0.7289942
+
+trbRfImpThSn <- data.frame(trbFitThSn$fit$fit$fit$variable.importance) %>% 
+  arrange(desc(trbFitThSn.fit.fit.fit.variable.importance)) %>% 
+  rownames_to_column() %>% 
+  rename("Feature" = "rowname",
+         "RFImportance" = "trbFitThSn.fit.fit.fit.variable.importance") %>% 
+  mutate(Group = "TRB")
+#### Repeat for farm
+
+
+trainfamFSxFr <- fread("ctmaxTrainF.SxFr.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+  inner_join(meta) %>% 
+  distinct()
+
+
+dataTrainFSxFr <- fread("ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+fTrainImpSxFr <- data.frame(apply(dataTrainFSxFr, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
+
+fForRFSxFr <- na.omit(cbind(fTrainImpSxFr, trainfamFSxFr$Temp_C)) %>% 
+  rename( "CtMax" = "trainfamFSxFr$Temp_C")
+
+
+fRecipeSxFr <- recipe(CtMax ~ ., data = fForRFSxFr) 
+ 
+fWfSxFr <- workflow(fRecipeSxFr, rf_generic)
+
+fFitSxFr <- fit(fWfSxFr, fForRFSxFr) #rsq = 0.7238919 
+
+fRfImpSxFr <- data.frame(fFitSxFr$fit$fit$fit$variable.importance) %>% 
+  arrange(desc(fFitSxFr.fit.fit.fit.variable.importance)) %>% 
+  rownames_to_column() %>% 
+  rename("Feature" = "rowname",
+         "RFImportance" = "fFitSxFr.fit.fit.fit.variable.importance") %>% 
+  mutate(Group = "F")
+
+
+combinedRF <- rbind(fRfImpSxFr, trbRfImpThSn) %>%  
+  separate_wider_delim(Feature, delim = ".1_", names = c("NC", "POS")) %>% 
+  separate_wider_delim(POS, delim = "_", names = c("POS", "N")) %>%
+  mutate(NC = paste0(NC, ".1")) %>% 
+  mutate(ID = paste0(NC, "_", POS)) %>% 
+  mutate(Feature = paste0(ID, "_", N)) %>% 
+  merge(chr, by.x = "NC", by.y = "CHROM") %>% 
+  select(c(Number, POS, Feature, Group, RFImportance)) %>% 
+  arrange(desc(RFImportance))
+
+```
+
+::: {.panel-tabset}
+
+#### SNPs
+```{r}
+rmarkdown::paged_table(combinedRF)
+```
+
+#### Aqc Summary
+```{r}
+fFitSxFr
+```
+
+#### Wild Summary
+```{r}
+trbFitThSn 
+```
+
+:::
+
+#### RF Test
+```{r}
+#| message: false
+trbTestFam <- fread("ctmaxTrainTRB.ThSn.fam") %>% 
+  select(V2) %>% 
+  rename("IID" = "V2") %>% 
+  left_join(metaPCA)
+
+trbTestSNPs <- fread("ctmaxTrainTRB.ThSn.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+trbTest <- cbind(trbTestSNPs, trbTestFam$Temp_C)
+
+predictionTRB <- predict(trbFitThSn, new_data = trbTest) %>% 
+  cbind(trbTestFam$Temp_C, trbTestFam$SampleID) %>% 
+  rename("Prediction" = ".pred",
+         "Actual" = "trbTestFam$Temp_C",
+         "SampleID" = "trbTestFam$SampleID") %>% 
+  mutate(Group = "TRB")
+
+### Farm
+
+fTestFam <- fread("ctmaxTrainF.SxFr.fam") %>% 
+  select(V2) %>% 
+  rename("IID" = "V2") %>% 
+  left_join(metaPCA)
+
+fTestSNPs <- fread("ctmaxTrainF.SxFr.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+fTest <- cbind(fTestSNPs, fTestFam$Temp_C)
+
+predictionF <- predict(fFitSxFr, new_data = fTest) %>% 
+  cbind(fTestFam$Temp_C, fTestFam$SampleID) %>% 
+  rename("Prediction" = ".pred",
+         "Actual" = "fTestFam$Temp_C",
+         "SampleID" = "fTestFam$SampleID") %>% 
+  mutate(Group = "F") 
+
+predPlot <- rbind(predictionTRB, predictionF) %>% 
+  ggplot(aes(x = Prediction, y = Actual, colour = Group, label = SampleID)) +
+  geom_point() + 
+  theme_bw() + 
+  labs(title = "Predicted vs. Actual CTMax from Random Forest Models")
+
+predPlot
+```
+
+
+#### Manhattan Plot of Random Forest results
+
+```{r}
+rfMP <- prepData(combinedRF) %>% 
+  mutate(Number = as.numeric(Number))
+center <- rfMP[,.(center=mean(BP)),.(Number)];
+
+
+mp <-  ggplot() + 
+   geom_point(data = rfMP, aes(x = BP, y = RFImportance, shape = as.factor(Group), colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+   scale_x_continuous(
+     label = center$Number,
+     breaks = center$center
+     ) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(rfMP$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "Random Forest Importance") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mp
+
+```
+There are no SNP overlaps between wild and farmed. 
+```{r}
+rmarkdown::paged_table(merge(fRfImpSxFr, trbRfImpThSn, by = "Feature"))
+```
+
+Does RF Importance correlate with a low p-value? 
+```{r}
+#| message: false
+#| warning: false
+plinkRfTRB<- trbGWAS10e4 %>% 
+  mutate(Feature = paste0(ID, "_", REF)) %>% 
+  merge(trbRfImpThSn)
+
+plinkRfF<- fffGWAS10e4 %>% 
+  mutate(Feature = paste0(ID, "_", REF)) %>% 
+  merge(fRfImpSxFr)
+
+plinkRfTrbF <- rbind(plinkRfTRB, plinkRfF)
+
+ggplot(plinkRfTrbF, aes(x = RFImportance, y = -log(P, base = 10), 
+                          colour = Group)) +
+  geom_point() +
+  theme_bw() +
+  stat_smooth(method = "lm")
+```
+
+#### Bedtools intersect genes: 
+```{r}
+finalF <- fRfImpSxFr %>% 
+  separate_wider_delim(Feature, delim = ".1_", names = c("NC", "POS")) %>% 
+  separate_wider_delim(POS, delim = "_", names = c("POS", "N")) %>%
+  mutate(NC = paste0(NC, ".1")) %>% 
+  mutate(ID = paste0(NC, "_", POS)) %>% 
+  merge(chr) %>% 
+  mutate(POSend = POS) 
+
+
+finalTRB <- trbRfImpThSn %>% 
+  separate_wider_delim(Feature, delim = ".1_", names = c("NC", "POS")) %>% 
+  separate_wider_delim(POS, delim = "_", names = c("POS", "N")) %>%
+  mutate(NC = paste0(NC, ".1")) %>% 
+  mutate(ID = paste0(NC, "_", POS)) %>% 
+  merge(chr) %>% 
+  mutate(POSend = POS) 
+
+
+
+write.table(finalTRB %>%  
+              distinct() %>% 
+              select(c(NC, POS, POSend, ID)),
+  "FinalTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+write.table(finalF %>%  
+              distinct() %>% 
+              select(c(NC, POS, POSend, ID)),
+  "FinalF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+
+system("bedtools intersect -b FinalTRB.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  RF.Small.TRB.genes.tsv")
+system("bedtools intersect -b FinalF.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  RF.Small.F.genes.tsv")
+
+trbGene <- fread("RF.Small.TRB.genes.tsv") %>% 
+  rename("CHROM" = "V1",
+         "POS" = "V6", 
+         "ID" = "V8",
+         "Gene" = "V4") %>%
+  distinct() %>% 
+  mutate(Group = "TRB") %>% 
+  merge(plinkRfTRB, all.y = FALSE) %>% 
+  merge(chr, by = "CHROM") %>% 
+  select(c(Number, POS, Gene, Feature, Group, BETA, P, RFImportance))
+  
+fGene <- fread("RF.Small.F.genes.tsv") %>% 
+  rename("CHROM" = "V1",
+         "POS" = "V6", 
+         "ID" = "V8",
+          "Gene" = "V4") %>%
+  distinct() %>% 
+  mutate(Group = "F") %>% 
+  merge(plinkRfF, all.y = FALSE) %>% 
+  merge(chr, by = "CHROM") %>% 
+  select(c(Number, POS, Gene, Feature, Group, BETA, P, RFImportance))
+```
+
+Tailrace Top RF SNPs in Genes: 
+```{r}
+rmarkdown::paged_table(trbGene)
+```
+
+
+
+Aquaculture: Top RF SNPs in Genes: 
+```{r}
+rmarkdown::paged_table(fGene)
+```
+
+*Neither of these lists of genes create pathways in ShinyGO (too few genes for TRB)*
+
+
+There are no gene overlaps between wild and aquaculture: 
+```{r}
+geneOverlap <- merge(trbGene, fGene, by = "Gene") #no gene overlaps
+rmarkdown::paged_table(geneOverlap)
+```
+
+
+
+### Gradient Boosting
+
+
+For gradient boosting, I used a large subset of SNPs (not the reduced RF results).
+```{r xgBoostDataPrepTables}
+#| message: false
+
+
+write.table(trbGWAS10e4 %>%  
+              mutate(POSend = POS) %>% 
+              select(`#CHROM`, POS, POSend, ID) %>%
+              distinct(),
+  "TRBctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+
+write.table(fffGWAS10e4 %>%  
+              filter(P < 0.00001) %>% 
+                 mutate(POSend = POS) %>% 
+              select(`#CHROM`, POS, POSend, ID) %>%
+              distinct(),
+  "FFFctmaxGWASsnps.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+```
+
+
+```{r xgBoostPLINK}
+#| output: false
+# TRB
+system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTrainCTmax.tsv --extract TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainTRB  --make-bed" ))
+
+system(paste(plinkPath, "--bfile suspectedSalmon --keep TrbTestCTmax.tsv --extract TRBctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestTRB --make-bed" ))
+
+# Aqc
+
+system(paste(plinkPath, "--bfile suspectedSalmon --keep FTrainCTmax.tsv --extract FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTrainFFF --mind 0.2 --make-bed" ))
+
+system(paste(plinkPath, "--bfile suspectedSalmon --keep FTestCTmax.tsv --extract FFFctmaxGWASsnps.bed --allow-extra-chr --chr-set 29 --recode A --out ctmaxTestFFF --mind 0.2 --make-bed" ))
+```
+
+
+```{r xgBoostDataPrep}
+#| message: false
+#| 
+trainfamTRB <- fread("ctmaxTrainTRB.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+   inner_join(metaPCA) %>% 
+   distinct()
+
+
+dataTrainTRB <- fread("ctmaxTrainTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+#genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+trbTrainImp<- data.frame(apply(dataTrainTRB, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
+
+TRBForRF <- na.omit(cbind(trbTrainImp, trainfamTRB$Temp_C)) %>% 
+  rename( "CtMax" = "trainfamTRB$Temp_C")
+
+
+###########
+## TEST ##
+###########
+
+testfamTRB <- fread("ctmaxTestTRB.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+  inner_join(metaPCA) 
+
+
+dataTestTRB <- fread("ctmaxTestTRB.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+#genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+trbTestImp<- data.frame(apply(dataTestTRB, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x)))))))
+
+trbTest <- cbind(trbTestImp, testfamTRB$Temp_C) %>% 
+  rename("Temp_C" = "testfamTRB$Temp_C")
+
+##############
+### Farm ####
+#############
+
+trainfamF <- fread("ctmaxTrainFFF.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+  inner_join(aquabounty) %>% 
+  distinct()
+
+
+dataTrainF <- fread("ctmaxTrainFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+#genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+fffTrainImp<- data.frame(apply(dataTrainF, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
+
+FForRF <- na.omit(cbind(fffTrainImp, trainfamF$Temp_C)) %>% 
+  rename("CtMax"= "trainfamF$Temp_C")
+
+
+###########
+## TEST ##
+###########
+
+testfamFFF <- fread("ctmaxTestFFF.fam") %>% 
+  select(V1, V2) %>% 
+  rename("FID" = "V1",
+         "IID" = "V2") %>% 
+  inner_join(aquabounty) %>% 
+  distinct()
+
+
+dataTestF <- fread("ctmaxTestFFF.raw", sep = "\t") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+#genos.dose.train.rda <- fread(paste0("NA.train.raw"), sep = " ") %>%  select (-FID, -IID, -PAT, -MAT, -SEX, -PHENOTYPE)
+
+fffTestImp<- data.frame(apply(dataTestF, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))) 
+
+fTest <- cbind(fffTestImp, testfamFFF$Temp_C) %>% 
+  rename("Temp_C" = "testfamFFF$Temp_C")
+
+```
+
+```{r xgBoostModel}
+#| message: false
+#
+trbRecipe <- recipe(CtMax ~ ., data = TRBForRF) 
+ ## need to giure out params!!
+
+
+TRBxgboostModel <- boost_tree(trees = 1000, tree_depth = 2, learn_rate = 0.1) %>%
+  set_mode("regression") %>% 
+  set_engine("xgboost")
+
+trbXgboostWf <- workflow(trbRecipe, TRBxgboostModel)
+
+trbXgFit <- fit(trbXgboostWf, TRBForRF)
+ 
+trbXgImp <- xgb.importance(trbXgFit$fit$fit$fit) %>% 
+  mutate(ID = substr(Feature,1,nchar(Feature)-2)) %>% 
+   arrange(desc(Gain)) %>% 
+#  mutate(rank = row_number()) %>% 
+  mutate(Group = "TRB")
+
+
+
+fRecipe <- recipe(CtMax ~ ., data = FForRF) 
+ ## need to giure out params!!
+
+
+FxgboostModel <- boost_tree(trees = 1000, tree_depth = 2, learn_rate = 0.1) %>% 
+  set_mode("regression") %>% 
+  set_engine("xgboost")
+
+fXgboostWf <- workflow(fRecipe, FxgboostModel)
+
+fXgFit <- fit(fXgboostWf, FForRF)
+ 
+fXgImp <- xgb.importance(fXgFit$fit$fit$fit) %>% 
+  mutate(ID = substr(Feature,1,nchar(Feature)-2)) %>% 
+   arrange(desc(Gain)) %>% 
+ # mutate(rank = row_number()) %>% 
+  mutate(Group = "F")
+
+xgBoostImp <- rbind(trbXgImp, fXgImp) %>% 
+   separate_wider_delim(ID, delim = ".1_", names = c("NC", "POS")) %>% 
+  #separate_wider_delim(POS, delim = "_", names = c("POS", "N")) %>%
+  mutate(NC = paste0(NC, ".1")) %>% 
+ # mutate(ID = paste0(NC, "_", POS)) %>% 
+  merge(chr, by.x = "NC", by.y = "CHROM")
+
+
+
+```
+#### XGBoost Test
+```{r xgboostTest}
+
+predictionTRB <- predict(trbXgFit, new_data = trbTest) %>% 
+  cbind(testfamTRB$Temp_C, testfamTRB$SampleID) %>% 
+  rename("Prediction" = ".pred",
+         "Actual" = "testfamTRB$Temp_C",
+         "SampleID" = "testfamTRB$SampleID") %>% 
+  mutate(Group = "TRB") 
+
+
+predictionF <- predict(fXgFit, new_data = fTest) %>% 
+  cbind(testfamFFF$Temp_C, testfamFFF$SampleID) %>% 
+  rename("Prediction" = ".pred",
+         "Actual" = "testfamFFF$Temp_C",
+         "SampleID" = "testfamFFF$SampleID") %>% 
+  mutate(Group = "F") 
+
+xgboostPred <- rbind(predictionTRB, predictionF) %>% 
+  ggplot(aes(x = Prediction, y = Actual, colour = Group)) +
+  geom_point() + 
+  theme_bw() + 
+  labs(title = "Gradient Boosting Predicted vs. Actual CTMax")
+
+xgboostPred
+```
+
+
+#### Manhattan Plot of xgBoost Results
+
+xgboost model importance only provides information for SNPs used in tree splits (most important variables), so I did not determine an importance cutoff, but plotted all information provided from the model.
+
+
+
+::: {.panel-tabset}
+
+##### Gain
+```{r gainMP}
+xgBoostMP <- prepData(xgBoostImp)
+
+center <- xgBoostMP[,.(center=mean(BP)),.(Number)];
+
+
+mpXG <-  ggplot() + 
+   geom_point(data = xgBoostMP, aes(x = BP, y = Gain, colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+  scale_x_continuous(
+    label = center$Number,
+    breaks = center$center) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(xgBoostMP$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "Gain") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mpXG
+
+
+
+```
+
+##### Cover
+```{r coverMP}
+mpXC <-  ggplot() + 
+   geom_point(data = xgBoostMP, aes(x = BP, y = Cover, colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+  scale_x_continuous(
+    label = center$Number,
+    breaks = center$center) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(xgBoostMP$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "Cover") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mpXC
+
+```
+
+##### Frequency
+```{r FreqMP}
+mpXF <-  ggplot() + 
+   geom_point(data = xgBoostMP, aes(x = BP, y = Frequency, colour = as.factor(Number)),  alpha = 1, size = 2) +
+  theme_bw() + 
+  scale_x_continuous(
+    label = center$Number,
+    breaks = center$center) +
+  scale_colour_manual(values = rep(
+    c("steelblue", "gray40"),
+    unique(length(xgBoostMP$Number))
+  )) +  
+  theme(
+    legend.position = "none",
+    #panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, size = 8, vjust = 0.5) 
+  ) +
+  labs(x = "Position", y = "Frequency") +
+  facet_wrap(~Group, ncol = 1)
+ 
+mpXF
+
+```
+
+:::
+
+#### Compare TRB and F:
+```{r TRBvFxgboost}
+rmarkdown::paged_table(merge(fXgImp, trbXgImp, by = "Feature"))
+```
+
+No overlap. 
+
+#### Bedtools intersect with genes:
+
+Compare TRB and F by gene: 
+```{r trbFGeneOverlapXg}
+#| message: false
+
+trbForGeneXG <- xgBoostImp %>% 
+  filter(Group == "TRB") %>% 
+  mutate(ID = paste0(NC, "_", POS))
+
+fForGeneXG <- xgBoostImp %>% 
+  filter(Group == "F") %>% 
+  mutate(ID = paste0(NC, "_", POS))
+
+write.table(trbForGeneXG %>%  
+              mutate(POSend = POS) %>% 
+              select(c(NC, POS, POSend, ID)),
+  "xgBoostTRB.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+write.table(fForGeneXG %>%  
+              mutate(POSend = POS) %>% 
+              select(c(NC, POS, POSend, ID)),
+  "xgBoostF.bed", col.names = F, row.names = F, sep = "\t", quote = F)
+
+
+system("bedtools intersect -b xgBoostTRB.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  xgBoostTRBGene.tsv")
+
+system("bedtools intersect -b xgBoostF.bed -a ~/Desktop/Projects/CTMax_GWAS/Updated/Ssal3_1.genes.unique.bed -wb >  xgBoostFGene.tsv")
+
+
+rmarkdown::paged_table(merge(fread("xgBoostTRBGene.tsv"), fread("xgBoostFGene.tsv"), by = "V4") %>% 
+  select(V4))
+
+```
+
+
+ShinyGO for each list seperately reveals 1 pathway for TRB (Arginine and proline metabolism) and five for aquaculture: Biosynthesis of unsaturated fatty acids, Fatty acid metabolism, PPAR signaling pathway, MRNA surveillance pathway, Tight junction. However, all except tight junction only have two genes in the pathway. 
+
+#### Compare to RF results:
+
+For now, I will use gain to compare to random forest, which is generally considered the best indicator of gradient boosting importance (though I will read more about this!)
+
+
+SNP overlap: 
+```{r xgBoostToRF}
+
+merge(xgBoostImp, combinedRF, by = c("Feature", "Group", "Number", "POS")) %>% 
+  ggplot(aes(x = Gain, y = RFImportance, color = Group)) +
+  geom_point() + 
+  theme_bw()
+```
+RF + xgboost **distinct** genes overlap for TRB: 
+```{r}
+##trb
+rmarkdown::paged_table(merge(fread("xgBoostTRBGene.tsv"), fread("RF.Small.TRB.genes.tsv"), by = "V4") %>% 
+  select(V4) %>%
+  distinct())
+
+```
+For aquaculture: 
+```{r}
+##farm
+rmarkdown::paged_table(merge(fread("xgBoostFGene.tsv"), fread("RF.Small.F.genes.tsv"), by = "V4") %>% 
+  select(V4) %>%
+  distinct())
+```
+
+All of these overlaps change slighlty depending on RF/ XGBoost run. I think model tuning would make the results more stable, though there may always be some stochasticity.
+
+```{r xgBoostEpistasis}
+#| output: false
+#| eval: false
+
+# SHAP analysis
+df_explainTRB <- TRBForRF[1:96, ]
+
+X_predTRB <- bake(  # Goes to xgboost:::predict.xgb.Booster()
+  prep(trbRecipe), 
+  has_role("predictor"),
+  new_data = df_explainTRB,
+  composition = "matrix"
+)
+
+stopifnot(colnames(X_predTRB) %in% colnames(df_explainTRB))
+
+shap_valuesTRB <- extract_fit_engine(trbXgFit) |> 
+  shapviz(X_pred = X_predTRB, X = df_explainTRB, interactions = TRUE)
+
+# SHAP importance
+# shap_values |> 
+#   sv_importance(show_numbers = TRUE) +
+#   ggtitle("SHAP importance")
+
+# Absolute average SHAP interactions (off-diagonals already multiplied by 2)
+shapdfTRB <- shap_valuesTRB |> 
+  sv_interaction(kind = "no")
+
+
+
+epTRB <- data.frame(shapdfTRB) %>% 
+ filter(if_any(starts_with('NC_'), ~ . > 0.001)) %>% 
+  rownames_to_column() %>% 
+  pivot_longer(cols = starts_with('NC_')) %>% 
+  filter(value > 0.001) %>% 
+  rename("SNP1" = "rowname",
+         "SNP2" = "name") %>% 
+  filter(SNP1 != SNP2) %>% 
+  separate_wider_delim(SNP1, delim = ".1_", names = c("NC_SNP1", "POS_SNP1")) %>% 
+  separate_wider_delim(POS_SNP1, delim = "_", names = c("POS_SNP1", "N1")) %>%
+  mutate(NC_SNP1 = paste0(NC_SNP1, ".1")) %>% 
+  separate_wider_delim(SNP2, delim = ".1_", names = c("NC_SNP2", "POS_SNP2")) %>% 
+  separate_wider_delim(POS_SNP2, delim = "_", names = c("POS_SNP2", "N2")) %>%
+  mutate(NC_SNP2 = paste0(NC_SNP2, ".1")) %>% 
+  merge(chr, by.x='NC_SNP1', by.y='CHROM') %>% 
+  rename("NumberSNP1" = "Number") %>% 
+  merge(chr, by.x='NC_SNP2', by.y='CHROM') %>% 
+  rename("NumberSNP2" = "Number") %>% 
+  mutate(ID1 = paste0(NC_SNP1, "_", POS_SNP1)) %>% 
+  mutate(ID2 = paste0(NC_SNP2, "_", POS_SNP2)) 
+
+mTRB <- epTRB %>% 
+  merge(trbXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE) #%>% 
+  #select(c(ID1, ID2, NumberSNP1, NumberSNP2, value, Gain, rank))
+# 
+# mTRB %>% 
+#   ggplot(aes(x = value, y = Gain)) + 
+#   geom_point()+
+#   theme_bw()
+
+# SHAP analysis
+df_explainF <- FForRF[1:53, ]
+
+X_predF <- bake(  # Goes to xgboost:::predict.xgb.Booster()
+  prep(fRecipe), 
+  has_role("predictor"),
+  new_data = df_explainF,
+  composition = "matrix"
+)
+
+stopifnot(colnames(X_predF) %in% colnames(df_explainF))
+
+shap_values <- extract_fit_engine(fXgFit) |> 
+  shapviz(X_pred = X_predF, X = df_explainF, interactions = TRUE)
+
+# SHAP importance
+# shap_values |> 
+#   sv_importance(show_numbers = TRUE) +
+#   ggtitle("SHAP importance")
+
+# Absolute average SHAP interactions (off-diagonals already multiplied by 2)
+shapdf <- shap_values |> 
+  sv_interaction(kind = "no")
+
+ep <- data.frame(shapdf) %>% 
+ filter(if_any(starts_with('NC_'), ~ . > 0.001)) %>% 
+  rownames_to_column() %>% 
+  pivot_longer(cols = starts_with('NC_')) %>% 
+  filter(value > 0.001) %>% 
+  rename("SNP1" = "rowname",
+         "SNP2" = "name") %>% 
+  filter(SNP1 != SNP2) %>% 
+  separate_wider_delim(SNP1, delim = ".1_", names = c("NC_SNP1", "POS_SNP1")) %>% 
+  separate_wider_delim(POS_SNP1, delim = "_", names = c("POS_SNP1", "N1")) %>%
+  mutate(NC_SNP1 = paste0(NC_SNP1, ".1")) %>% 
+  separate_wider_delim(SNP2, delim = ".1_", names = c("NC_SNP2", "POS_SNP2")) %>% 
+  separate_wider_delim(POS_SNP2, delim = "_", names = c("POS_SNP2", "N2")) %>%
+  mutate(NC_SNP2 = paste0(NC_SNP2, ".1")) %>% 
+  merge(chr, by.x='NC_SNP1', by.y='CHROM') %>% 
+  rename("NumberSNP1" = "Number") %>% 
+  merge(chr, by.x='NC_SNP2', by.y='CHROM') %>% 
+  rename("NumberSNP2" = "Number") %>% 
+  mutate(ID1 = paste0(NC_SNP1, "_", POS_SNP1)) %>% 
+  mutate(ID2 = paste0(NC_SNP2, "_", POS_SNP2)) 
+
+m <- ep %>% 
+  merge(fXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE)# %>% 
+ # select(c(ID1, ID2, NumberSNP1, NumberSNP2, value, Gain, rank))
+
+m %>% 
+  ggplot(aes(x = NumberSNP1, y = NumberSNP2, colour = value, alpha = 0.5, size = Gain)) + 
+  geom_point()+
+  theme_bw()
+
+```
+
+
+
+# To-do and Next Steps
+
+To do: \
+- Tune RF and xgboost models\
+- Finish genotyping aquaculture fish and run admixture, then model CTMax by Aquaculture Ancestry\
+- Polygenic Risk Scores\
+- Methylation data\
+
+Related Projects: \
+- Make code for Manhattan Plots shareable on GitHub\
+- Compare GONE results for aquaculture introgressed popultaions vs. less introgressed populations
+
