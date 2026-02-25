@@ -714,7 +714,8 @@ There are no SNP overlaps between wild and farmed.
 rmarkdown::paged_table(merge(fRfImpSxFr, trbRfImpThSn, by = "Feature"))
 ```
 
-Does RF Importance correlate with a low p-value? 
+Does RF Importance correlate with a low p-value or high absolute value of beta?
+
 ```{r}
 #| message: false
 #| warning: false
@@ -728,12 +729,31 @@ plinkRfF<- fffGWAS10e4 %>%
 
 plinkRfTrbF <- rbind(plinkRfTRB, plinkRfF)
 
-ggplot(plinkRfTrbF, aes(x = RFImportance, y = -log(P, base = 10), 
-                          colour = Group)) +
+ggplot(plinkRfTrbF, aes(x = RFImportance, y = abs(BETA), #-log(P, base = 10), 
+                        colour = Group)) +
   geom_point() +
   theme_bw() +
   stat_smooth(method = "lm")
 ```
+::: {.panel-tabset}
+##### -log(p)
+```{r}
+ggplot(plinkRfTrbF, aes(x = RFImportance, y =  -log(P, base = 10), 
+                        colour = Group)) +
+  geom_point() +
+  theme_bw() +
+  stat_smooth(method = "lm")
+```
+##### |beta|
+```{r}
+ggplot(plinkRfTrbF, aes(x = RFImportance, y =  abs(BETA), 
+                        colour = Group)) +
+  geom_point() +
+  theme_bw() +
+  stat_smooth(method = "lm")
+```
+
+:::
 
 #### Bedtools intersect genes: 
 ```{r}
@@ -1189,9 +1209,15 @@ Many of the overlaps in genes between gradient boosting and random forest are on
 
 All of these overlaps change slighlty depending on RF/ XGBoost run. I think model tuning would make the results more stable, though there may always be some stochasticity.
 
+#### Epistatic Interactions with xgboost
+
+
+SHAP can be used to detect epistasis (interaction effects) from the xgboost model. 
+Still working through this and not sure if it will be useful. 
+
 ```{r xgBoostEpistasis}
-#| output: false
-#| eval: false
+#| message: false
+#| warning: false
 
 # SHAP analysis
 df_explainTRB <- TRBForRF[1:96, ]
@@ -1217,15 +1243,14 @@ shap_valuesTRB <- extract_fit_engine(trbXgFit) |>
 shapdfTRB <- shap_valuesTRB |> 
   sv_interaction(kind = "no")
 
-
-
 epTRB <- data.frame(shapdfTRB) %>% 
  filter(if_any(starts_with('NC_'), ~ . > 0.001)) %>% 
   rownames_to_column() %>% 
   pivot_longer(cols = starts_with('NC_')) %>% 
   filter(value > 0.001) %>% 
   rename("SNP1" = "rowname",
-         "SNP2" = "name") %>% 
+         "SNP2" = "name",
+          "shapInteractionValue" = "value") %>% 
   filter(SNP1 != SNP2) %>% 
   separate_wider_delim(SNP1, delim = ".1_", names = c("NC_SNP1", "POS_SNP1")) %>% 
   separate_wider_delim(POS_SNP1, delim = "_", names = c("POS_SNP1", "N1")) %>%
@@ -1241,7 +1266,8 @@ epTRB <- data.frame(shapdfTRB) %>%
   mutate(ID2 = paste0(NC_SNP2, "_", POS_SNP2)) 
 
 mTRB <- epTRB %>% 
-  merge(trbXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE) #%>% 
+  merge(trbXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE) %>% 
+  mutate(Group = "TRB")
   #select(c(ID1, ID2, NumberSNP1, NumberSNP2, value, Gain, rank))
 # 
 # mTRB %>% 
@@ -1279,7 +1305,8 @@ ep <- data.frame(shapdf) %>%
   pivot_longer(cols = starts_with('NC_')) %>% 
   filter(value > 0.001) %>% 
   rename("SNP1" = "rowname",
-         "SNP2" = "name") %>% 
+         "SNP2" = "name",
+         "shapInteractionValue" = "value") %>% 
   filter(SNP1 != SNP2) %>% 
   separate_wider_delim(SNP1, delim = ".1_", names = c("NC_SNP1", "POS_SNP1")) %>% 
   separate_wider_delim(POS_SNP1, delim = "_", names = c("POS_SNP1", "N1")) %>%
@@ -1294,17 +1321,24 @@ ep <- data.frame(shapdf) %>%
   mutate(ID1 = paste0(NC_SNP1, "_", POS_SNP1)) %>% 
   mutate(ID2 = paste0(NC_SNP2, "_", POS_SNP2)) 
 
-m <- ep %>% 
-  merge(fXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE)# %>% 
+mF <- ep %>% 
+  merge(fXgImp, by.x = "ID1", by.y = "ID", all.x = TRUE, all.y = TRUE) %>% 
+  mutate(Group = "F")
  # select(c(ID1, ID2, NumberSNP1, NumberSNP2, value, Gain, rank))
 
-m %>% 
-  ggplot(aes(x = NumberSNP1, y = NumberSNP2, colour = value, alpha = 0.5, size = Gain)) + 
-  geom_point()+
-  theme_bw()
+interact <- rbind(mTRB, mF) %>% 
+  ggplot(aes(x = NumberSNP1, y = NumberSNP2, colour = Gain, size = shapInteractionValue)) + 
+  geom_point(alpha = 0.5)+
+  theme_bw() + 
+  facet_wrap(~Group, ncol = 1) + 
+  labs(title = "SHAP Interaction",
+       x = "Chromosome SNP 1",
+       y = "Chromosome SNP2")
 
+interact
 ```
-
+Lighter coloured points have a high gain (importance) for SNP1 in the comparison, and larger points indicate a higher interaction value (where importance depends on the prescence of both SNPs).
+For large, dark coloured points, they may only be important when paired. 
 
 
 # To-do and Next Steps
